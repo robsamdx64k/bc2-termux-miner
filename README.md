@@ -31,3 +31,20 @@ pkg update -y && pkg install -y git
 git clone https://github.com/robsamdx64k/bc2-termux-miner
 cd bc2-termux-miner
 bash install.sh
+
+
+
+
+
+Configure:
+cp config.env.example config.env
+nano config.env
+
+Start mining:
+bash start.sh
+
+Check status:
+bash status.sh
+
+Stop:
+bash stop.sh

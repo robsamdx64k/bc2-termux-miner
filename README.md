@@ -60,3 +60,34 @@ If you’re running hundreds of phones, consider:
 A local stratum proxy per hub (optional future feature)
 
 Staggered restarts
+
+
+“ar: No such file or directory”
+
+Fixed by installing binutils (installer does this). If you hit it manually:
+
+pkg install -y binutils
+
+Miner disconnects / stratum_recv_line failed
+
+The watchdog will restart automatically. You can also:
+
+Lower threads
+
+Confirm your phone port VarDiff targetTime isn’t too aggressive
+
+Ensure Wi-Fi power saving is disabled
+
+Files
+
+install.sh - installs deps, builds miner, sets up SSH
+
+start.sh - starts miner + watchdog
+
+stop.sh - stops miner
+
+status.sh - shows status/log tail + quick stats
+
+config.env.example - your settings template
+
+boot/ - optional auto-start hooks

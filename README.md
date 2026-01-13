@@ -48,3 +48,15 @@ bash status.sh
 
 Stop:
 bash stop.sh
+
+
+
+Use the auto worker naming (bc1... .phone-XXXX) so your Miningcore UI stays clean.
+
+Keep phones on the phone port (:3333) so shares aren’t 1/hour.
+
+If you’re running hundreds of phones, consider:
+
+A local stratum proxy per hub (optional future feature)
+
+Staggered restarts

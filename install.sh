@@ -30,7 +30,7 @@ echo
 echo "== Set SSH Password =="
 if [ -z "${BC2_SSH_PASSWORD:-}" ]; then
   echo "No BC2_SSH_PASSWORD env set — asking user"
-  read -s -p "Enter SSH password for this phone: " 123
+  read -s -p "Enter SSH password for this phone: " BC2_SSH_PASSWORD
   echo
 fi
 

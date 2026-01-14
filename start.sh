@@ -1,20 +1,40 @@
 #!/data/data/com.termux/files/usr/bin/bash
-set -euo pipefail
+set -eu
+(set -o pipefail) 2>/dev/null && set -o pipefail || true
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
-# Load config
-source ./config.env
+# Ensure dirs exist
+mkdir -p logs run
 
-MINER_BIN="./cpuminer-opt/cpuminer"
+# Load config
+if [ ! -f "./config.env" ]; then
+  echo "Missing ./config.env"
+  echo "Fix: cp config.env.example config.env && nano config.env"
+  exit 1
+fi
+. ./config.env
+
+# Defaults (prevents 'unbound variable' crashes)
+: "${POOL_PASS:=x}"
+: "${THREADS:=8}"
+: "${WATCHDOG_SLEEP:=15}"
+: "${EXTRA_FLAGS:=}"
+
+# Prefer global build in ~/cpuminer-opt; fallback to repo-local cpuminer-opt
+MINER_BIN="${MINER_BIN:-$HOME/cpuminer-opt/cpuminer}"
+if [ ! -x "$MINER_BIN" ] && [ -x "$DIR/cpuminer-opt/cpuminer" ]; then
+  MINER_BIN="$DIR/cpuminer-opt/cpuminer"
+fi
+
 LOG="logs/miner.log"
 PID="run/miner.pid"
 WDPID="run/watchdog.pid"
 
 if [ ! -x "$MINER_BIN" ]; then
   echo "Miner binary not found/executable: $MINER_BIN"
-  echo "Run: bash install.sh"
+  echo "Build it first (one-time): cd ~/cpuminer-opt && make -j\$(nproc)"
   exit 1
 fi
 
@@ -24,15 +44,21 @@ if [ -n "${WORKER:-}" ]; then
   USER="${WALLET}.${WORKER}"
 fi
 
-URL="stratum+tcp://${POOL_HOST}:${POOL_PORT}"
+# Support either POOL_URL or POOL_HOST/POOL_PORT
+if [ -n "${POOL_URL:-}" ]; then
+  URL="$POOL_URL"
+else
+  URL="stratum+tcp://${POOL_HOST}:${POOL_PORT}"
+fi
 
 echo "== Starting Handwarmer =="
+echo "BIN:    $MINER_BIN"
 echo "URL:    $URL"
 echo "USER:   $USER"
 echo "THREADS:${THREADS}"
 echo "LOG:    $LOG"
 
-# Stop any existing
+# Stop any existing miner/watchdog
 bash ./stop.sh >/dev/null 2>&1 || true
 
 # Start miner (nohup background)
@@ -40,42 +66,63 @@ nohup "$MINER_BIN" \
   -a sha256d \
   -o "$URL" \
   -u "$USER" \
-  -p "${POOL_PASS}" \
-  -t "${THREADS}" \
-  ${EXTRA_FLAGS:-} \
+  -p "$POOL_PASS" \
+  -t "$THREADS" \
+  $EXTRA_FLAGS \
   >> "$LOG" 2>&1 &
 
 echo $! > "$PID"
 sleep 1
 
-# Watchdog (restarts miner if it dies or log shows stratum_recv_line failed)
+# Watchdog: restarts MINER only (does NOT call start.sh to avoid recursion)
 echo "== Starting watchdog =="
 nohup bash -c '
-  set -e
+  cd "'"$DIR"'"
+  LOG="logs/miner.log"
+  PID="run/miner.pid"
+
+  restart_miner() {
+    # kill old
+    if [ -f "$PID" ]; then
+      MPID="$(cat "$PID" 2>/dev/null || true)"
+      if [ -n "$MPID" ]; then kill "$MPID" 2>/dev/null || true; fi
+      rm -f "$PID"
+    fi
+
+    # start fresh
+    nohup "'"$MINER_BIN"'" \
+      -a sha256d \
+      -o "'"$URL"'" \
+      -u "'"$USER"'" \
+      -p "'"$POOL_PASS"'" \
+      -t "'"$THREADS"'" \
+      '"$EXTRA_FLAGS"' \
+      >> "$LOG" 2>&1 &
+
+    echo $! > "$PID"
+    echo "[watchdog] restarted miner pid=$(cat "$PID")" >> "$LOG"
+  }
+
   while true; do
-    if [ ! -f run/miner.pid ]; then sleep '"${WATCHDOG_SLEEP}"'; continue; fi
-    MPID="$(cat run/miner.pid 2>/dev/null || true)"
+    MPID=""
+    [ -f "$PID" ] && MPID="$(cat "$PID" 2>/dev/null || true)"
+
     if [ -z "$MPID" ] || ! kill -0 "$MPID" 2>/dev/null; then
-      echo "[watchdog] miner not running -> restarting" >> logs/miner.log
-      bash start.sh >/dev/null 2>&1
-      exit 0
+      echo "[watchdog] miner not running -> restarting" >> "$LOG"
+      restart_miner
     fi
 
-    # If last ~50 lines contain recv_line failed, restart
-    if tail -n 80 logs/miner.log 2>/dev/null | grep -qi "stratum_recv_line failed"; then
-      echo "[watchdog] detected stratum_recv_line failed -> restarting" >> logs/miner.log
-      bash stop.sh >/dev/null 2>&1
-      sleep 2
-      bash start.sh >/dev/null 2>&1
-      exit 0
+    # if last ~120 lines contain recv_line failed or connection failed, restart
+    if tail -n 120 "$LOG" 2>/dev/null | grep -Eqi "stratum_recv_line failed|Stratum connection failed"; then
+      echo "[watchdog] detected stratum error -> restarting" >> "$LOG"
+      restart_miner
     fi
 
-    sleep '"${WATCHDOG_SLEEP}"'
+    sleep "'"$WATCHDOG_SLEEP"'"
   done
 ' >> "$LOG" 2>&1 &
 
 echo $! > "$WDPID"
 
-echo "✅ Miner started. LFG DeskNuts"
+echo "✅ Miner started."
 echo "   Tail logs: tail -f $LOG"
-

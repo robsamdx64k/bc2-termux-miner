@@ -1,3 +1,5 @@
+<img width="338" height="334" alt="image" src="https://github.com/user-attachments/assets/317a89d3-3ecf-4801-8039-b4e405c87203" />
+
 # bc2-termux-miner 🔥
 One-command onboarding for Android phones (Termux) to mine **BC2 (sha256d)** on your **local Miningcore**.
 

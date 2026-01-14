@@ -20,3 +20,4 @@ kill_pidfile "run/miner.pid"
 pkill -f "/cpuminer" 2>/dev/null || true
 
 echo "🛑 Stopped. Get a Gatoraid and LFG"
+

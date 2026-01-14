@@ -1,17 +1,35 @@
 #!/data/data/com.termux/files/usr/bin/bash
-set -e
+set -euo pipefail
 
-echo "🔥💰🖨️ BC2 Miner armv8 Installer 🔥🔥🔥"
-echo "By BobFarms / DeskNuts / ChatGPT"
-echo "================================"
+echo "== 🔥💰🖨️ BC2 Miner armv8 Installer 🔥🔥🔥 =="
 
-REPO_URL="https://github.com/robsamdx64k/bc2-termux-miner.git"
+# -------------------- SETTINGS (edit if you want) --------------------
+DEFAULT_SSH_PASSWORD="bf123"
+
+# Your pool (Miningcore on LAN)
+DEFAULT_POOL_HOST="192.168.68.182"
+DEFAULT_POOL_PORT="3333"   # phones port (low diff)
+DEFAULT_ALGO="sha256d"
+
+# Your payout wallet
+DEFAULT_WALLET="bc1q8daepl4txsz3n325rafdddwf9drhynjpt3tekt"
+
+# Phone threads (you said 8)
+DEFAULT_THREADS="8"
+
+# Repo to clone (this repo)
+REPO_URL="https://github.com/robsamdx64k/bc2-termux-miner"
 REPO_DIR="$HOME/bc2-termux-miner"
 
-echo "== Updating Termux =="
-pkg update -y && pkg upgrade -y
+# Miner repo
+MINER_URL="https://github.com/JayDDee/cpuminer-opt"
+MINER_DIR="$HOME/cpuminer-opt"
+# --------------------------------------------------------------------
 
-echo "== Installing dependencies =="
+# -------------------- Termux basics --------------------
+pkg update -y
+pkg upgrade -y
+
 pkg install -y \
   git clang make binutils \
   autoconf automake libtool pkg-config \
@@ -19,100 +37,121 @@ pkg install -y \
   openssh termux-services \
   coreutils findutils util-linux
 
-termux-wake-lock || true
+termux-wake-lock >/dev/null 2>&1 || true
 
-# ---------------- SSH ----------------
+# -------------------- SSH setup --------------------
 echo "== Enabling SSH (port 8022) =="
-sv-enable sshd || true
-sv up sshd || true
 
-echo "== Setting SSH password (bf123) =="
-echo -e "bf123\nbf123" | passwd
+# enable sshd service
+sv-enable sshd >/dev/null 2>&1 || true
 
+# ensure port 8022 in sshd_config if the file exists
 SSHD_CFG="$PREFIX/etc/ssh/sshd_config"
 if [ -f "$SSHD_CFG" ]; then
-  sed -i 's/^#\?Port .*/Port 8022/' "$SSHD_CFG" || true
-  grep -q "^Port" "$SSHD_CFG" || echo "Port 8022" >> "$SSHD_CFG"
+  if grep -q '^Port ' "$SSHD_CFG"; then
+    sed -i 's/^Port .*/Port 8022/' "$SSHD_CFG"
+  else
+    echo "Port 8022" >> "$SSHD_CFG"
+  fi
 fi
 
-echo "SSH is running on port 8022"
+# set password (Termux uses passwd for user u0_aNNN)
+echo "== Setting SSH password (${DEFAULT_SSH_PASSWORD}) =="
+printf "%s\n%s\n" "$DEFAULT_SSH_PASSWORD" "$DEFAULT_SSH_PASSWORD" | passwd >/dev/null
 
-# ---------------- Repo ----------------
-if [ ! -d "$REPO_DIR" ]; then
-  echo "== Cloning bc2-termux-miner =="
+# start sshd now
+sv up sshd >/dev/null 2>&1 || true
+echo "SSH is running on port 8022 (user is your Termux user)."
+echo "Test from LAN: ssh -p 8022 <phone-ip>"
+
+# -------------------- Clone / update this repo --------------------
+echo "== Cloning/updating bc2-termux-miner repo =="
+
+if [ ! -d "$REPO_DIR/.git" ]; then
+  rm -rf "$REPO_DIR" >/dev/null 2>&1 || true
   git clone "$REPO_URL" "$REPO_DIR"
+else
+  (cd "$REPO_DIR" && git pull --rebase || true)
 fi
 
 cd "$REPO_DIR"
 
-# ---------------- Device ID ----------------
-SERIAL="$(getprop ro.serialno 2>/dev/null)"
-[ -z "$SERIAL" ] || [ "$SERIAL" = "unknown" ] && SERIAL="$(settings get secure android_id 2>/dev/null)"
-[ -z "$SERIAL" ] && SERIAL="$(date +%s)"
+# -------------------- Auto worker name --------------------
+echo "== Creating device name =="
+SERIAL="$(getprop ro.serialno 2>/dev/null || true)"
+if [ -z "${SERIAL}" ] || [ "${SERIAL}" = "unknown" ]; then
+  SERIAL="$(settings get secure android_id 2>/dev/null || true)"
+fi
+if [ -z "${SERIAL}" ] || [ "${SERIAL}" = "null" ]; then
+  SERIAL="phone$(date +%s)"
+fi
+SHORT="${SERIAL: -4}"
+AUTO_WORKER="phone-${SHORT}"
+echo "Auto worker: ${AUTO_WORKER}"
 
-WORKER="phone-${SERIAL: -4}"
-echo "Auto worker: $WORKER"
+# -------------------- Config env --------------------
+echo "== Creating config.env =="
 
-# ---------------- Config ----------------
-if [ ! -f config.env.example ]; then
-cat > config.env.example <<EOF
-WALLET=bc1q8daepl4txsz3n325rafdddwf9drhynjpt3tekt
-POOL=100.67.218.96
-PORT=3333
-THREADS=8
-WORKER=""
-EOF
+if [ ! -f "config.env.example" ]; then
+  echo "ERROR: config.env.example missing in repo. Add it, commit, re-run."
+  exit 1
 fi
 
-[ ! -f config.env ] && cp config.env.example config.env
-
-grep -q '^WORKER=' config.env || echo 'WORKER=""' >> config.env
-sed -i "s/^WORKER=\"\"/WORKER=\"$WORKER\"/" config.env
-
-# ---------------- Miner ----------------
-echo "== Installing cpuminer-opt (JayDDee) =="
-
-if [ ! -d cpuminer-opt ]; then
-  git clone https://github.com/JayDDee/cpuminer-opt.git
+if [ ! -f "config.env" ]; then
+  cp -f config.env.example config.env
 fi
 
-cd cpuminer-opt
+# ensure keys exist (append if missing)
+ensure_kv () {
+  local key="$1"
+  local val="$2"
+  if grep -q "^${key}=" config.env; then
+    # replace
+    sed -i "s|^${key}=.*|${key}=\"${val}\"|g" config.env
+  else
+    echo "${key}=\"${val}\"" >> config.env
+  fi
+}
 
-if [ -f build-armv8.sh ]; then
-  bash build-armv8.sh
+ensure_kv "WALLET"   "$DEFAULT_WALLET"
+ensure_kv "POOL_URL" "stratum+tcp://${DEFAULT_POOL_HOST}:${DEFAULT_POOL_PORT}"
+ensure_kv "ALGO"     "$DEFAULT_ALGO"
+ensure_kv "THREADS"  "$DEFAULT_THREADS"
+ensure_kv "WORKER"   "$AUTO_WORKER"
+
+echo "Wrote config.env:"
+grep -E '^(WALLET|POOL_URL|ALGO|THREADS|WORKER)=' config.env || true
+
+# -------------------- Build cpuminer-opt --------------------
+echo "== Cloning/building cpuminer-opt =="
+
+if [ ! -d "$MINER_DIR/.git" ]; then
+  rm -rf "$MINER_DIR" >/dev/null 2>&1 || true
+  git clone "$MINER_URL" "$MINER_DIR"
+else
+  (cd "$MINER_DIR" && git pull --rebase || true)
+fi
+
+cd "$MINER_DIR"
+
+# preferred: armv8 script if present
+if [ -f "./build-armv8.sh" ]; then
+  bash ./build-armv8.sh
+elif [ -f "./build.sh" ]; then
+  bash ./build.sh
 else
   ./autogen.sh
   ./configure CFLAGS="-O3"
-  make -j$(nproc)
+  make -j"$(nproc)"
 fi
 
-cd ..
+cd "$REPO_DIR"
 
-# ---------------- Scripts ----------------
-cat > start.sh <<'EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-source config.env
-./cpuminer-opt/cpuminer \
-  -a sha256d \
-  -o stratum+tcp://$POOL:$PORT \
-  -u $WALLET.$WORKER \
-  -t $THREADS
-EOF
-
-cat > status.sh <<'EOF'
-ps aux | grep cpuminer | grep -v grep
-EOF
-
-chmod +x start.sh status.sh
-
-echo ""
-echo "🔥 INSTALL COMPLETE 🔥"
-echo "======================"
-echo "Worker: $WORKER"
-echo ""
-echo "To start mining:"
-echo "   cd ~/bc2-termux-miner"
-echo "   bash start.sh"
-echo ""
-echo "To SSH in:"
-echo "   ssh -p 8022 u0_aXXX@PHONE_IP"
+# -------------------- Done --------------------
+echo
+echo "== Install complete =="
+echo "Next:"
+echo "  cd ~/bc2-termux-miner"
+echo "  nano config.env        # optional edits"
+echo "  bash start.sh"
+echo "  bash status.sh"

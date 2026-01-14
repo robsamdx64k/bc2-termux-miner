@@ -78,3 +78,4 @@ echo $! > "$WDPID"
 
 echo "✅ Miner started. LFG DeskNuts"
 echo "   Tail logs: tail -f $LOG"
+

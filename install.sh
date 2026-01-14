@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 set -e
 
-echo "🔥 BC2 Miner armv8 Installer"
+echo "🔥💰🖨️ BC2 Miner armv8 Installer 🔥🔥🔥"
 echo "By BobFarms / DeskNuts / ChatGPT"
 echo "================================"
 
